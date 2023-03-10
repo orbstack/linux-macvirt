@@ -1121,7 +1121,8 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 				 struct fuse_req *req, bool in_flight)
 {
 	/* requests need at least 4 elements */
-	struct scatterlist *stack_sgs[6];
+	// usually goes up to 35
+	struct scatterlist *stack_sgs[36];
 	struct scatterlist stack_sg[ARRAY_SIZE(stack_sgs)];
 	struct scatterlist **sgs = stack_sgs;
 	struct scatterlist *sg = stack_sg;

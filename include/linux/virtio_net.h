@@ -136,6 +136,8 @@ retry:
 			p_off = thlen;
 			if (!pskb_may_pull(skb, p_off))
 				return -EINVAL;
+		} else {
+			skb->ip_summed = CHECKSUM_UNNECESSARY;
 		}
 	}
 

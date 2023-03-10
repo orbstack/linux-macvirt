@@ -363,7 +363,8 @@ static bool cgroup_is_mixable(struct cgroup *cgrp)
 	 * the no-internal-process constraint, so it can serve as a thread
 	 * root and a parent of resource domains at the same time.
 	 */
-	return !cgroup_parent(cgrp);
+	struct cgroup *parent = cgroup_parent(cgrp);
+	return !parent || !cgroup_parent(parent);
 }
 
 /* can @cgrp become a thread root? Should always be true for a thread root */

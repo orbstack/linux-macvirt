@@ -959,7 +959,7 @@ static ssize_t __nfsd4_write_time(struct file *file, char *buf, size_t size,
 		 *	  clients wait an hour before being able to
 		 *	  revoke a dead client's locks?
 		 */
-		if (i < 10 || i > 3600)
+		if (i < 0 || i > 3600)
 			return -EINVAL;
 		*time = i;
 	}

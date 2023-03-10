@@ -1632,6 +1632,8 @@ int proc_do_static_key(struct ctl_table *table, int write,
 	return ret;
 }
 
+int panic_timeout_sysctl = 10;
+
 static struct ctl_table kern_table[] = {
 #ifdef CONFIG_NUMA_BALANCING
 	{
@@ -1654,7 +1656,7 @@ static struct ctl_table kern_table[] = {
 #endif /* CONFIG_NUMA_BALANCING */
 	{
 		.procname	= "panic",
-		.data		= &panic_timeout,
+		.data		= &panic_timeout_sysctl,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,

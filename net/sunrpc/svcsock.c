@@ -46,6 +46,7 @@
 #include <linux/uaccess.h>
 #include <linux/highmem.h>
 #include <asm/ioctls.h>
+#include <net/af_vsock.h>
 
 #include <linux/sunrpc/types.h>
 #include <linux/sunrpc/clnt.h>
@@ -260,7 +261,7 @@ static ssize_t svc_tcp_read_msg(struct svc_rqst *rqstp, size_t buflen,
 	rqstp->rq_respages = &rqstp->rq_pages[i];
 	rqstp->rq_next_page = rqstp->rq_respages + 1;
 
-	iov_iter_bvec(&msg.msg_iter, READ, bvec, i, buflen);
+	iov_iter_bvec(&msg.msg_iter, ITER_DEST, bvec, i, buflen);
 	if (seek) {
 		iov_iter_advance(&msg.msg_iter, seek);
 		buflen -= seek;
@@ -780,6 +781,17 @@ static struct svc_xprt *svc_tcp_accept(struct svc_xprt *xprt)
 				 (SVC_SOCK_ANONYMOUS | SVC_SOCK_TEMPORARY));
 	if (IS_ERR(newsvsk))
 		goto failed;
+	// translate addr for vsock
+	if (sin->sa_family == AF_VSOCK) {
+		struct sockaddr_vm *svm = (struct sockaddr_vm *)sin;
+		int port = svm->svm_port;
+		port %= 65536;
+
+		struct sockaddr_in *sin4 = (struct sockaddr_in *)sin;
+		sin4->sin_family = AF_INET;
+		sin4->sin_port = htons(port);
+		sin4->sin_addr.s_addr = htonl(0x7f000008);
+	}
 	svc_xprt_set_remote(&newsvsk->sk_xprt, sin, slen);
 	err = kernel_getsockname(newsock, sin);
 	slen = err;
@@ -874,7 +886,7 @@ static ssize_t svc_tcp_read_marker(struct svc_sock *svsk,
 		want = sizeof(rpc_fraghdr) - svsk->sk_tcplen;
 		iov.iov_base = ((char *)&svsk->sk_marker) + svsk->sk_tcplen;
 		iov.iov_len  = want;
-		iov_iter_kvec(&msg.msg_iter, READ, &iov, 1, want);
+		iov_iter_kvec(&msg.msg_iter, ITER_DEST, &iov, 1, want);
 		len = sock_recvmsg(svsk->sk_sock, &msg, MSG_DONTWAIT);
 		if (len < 0)
 			return len;
@@ -1256,7 +1268,9 @@ static void svc_tcp_init(struct svc_sock *svsk, struct svc_serv *serv)
 		svsk->sk_datalen = 0;
 		memset(&svsk->sk_pages[0], 0, sizeof(svsk->sk_pages));
 
-		tcp_sock_set_nodelay(sk);
+		if (sk->sk_family != PF_VSOCK) {
+			tcp_sock_set_nodelay(sk);
+		}
 
 		set_bit(XPT_DATA, &svsk->sk_xprt.xpt_flags);
 		switch (sk->sk_state) {
@@ -1303,7 +1317,7 @@ static struct svc_sock *svc_setup_socket(struct svc_serv *serv,
 	inet = sock->sk;
 
 	/* Register socket with portmapper */
-	if (pmap_register)
+	if (pmap_register && inet->sk_family != PF_VSOCK)
 		err = svc_register(serv, sock_net(sock->sk), inet->sk_family,
 				     inet->sk_protocol,
 				     ntohs(inet_sk(inet)->inet_sport));
@@ -1377,11 +1391,13 @@ int svc_addsock(struct svc_serv *serv, const int fd, char *name_return,
 	if (!so)
 		return err;
 	err = -EAFNOSUPPORT;
-	if ((so->sk->sk_family != PF_INET) && (so->sk->sk_family != PF_INET6))
+	if ((so->sk->sk_family != PF_INET) && (so->sk->sk_family != PF_INET6) &&
+	    (so->sk->sk_family != PF_VSOCK))
 		goto out;
 	err =  -EPROTONOSUPPORT;
 	if (so->sk->sk_protocol != IPPROTO_TCP &&
-	    so->sk->sk_protocol != IPPROTO_UDP)
+	    so->sk->sk_protocol != IPPROTO_UDP &&
+		so->sk->sk_protocol != 0)
 		goto out;
 	err = -EISCONN;
 	if (so->state > SS_UNCONNECTED)
