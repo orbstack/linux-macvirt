@@ -267,6 +267,9 @@ int btrfs_read_qgroup_config(struct btrfs_fs_info *fs_info);
 void btrfs_free_qgroup_config(struct btrfs_fs_info *fs_info);
 struct btrfs_delayed_extent_op;
 
+struct btrfs_qgroup *btrfs_find_qgroup_rb(struct btrfs_fs_info *fs_info,
+					   u64 qgroupid);
+
 /*
  * Inform qgroup to trace one dirty extent, its info is recorded in @record.
  * So qgroup can account it at transaction committing time.

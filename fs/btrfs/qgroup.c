@@ -180,6 +180,12 @@ static struct btrfs_qgroup *find_qgroup_rb(struct btrfs_fs_info *fs_info,
 	return NULL;
 }
 
+struct btrfs_qgroup *btrfs_find_qgroup_rb(struct btrfs_fs_info *fs_info,
+					   u64 qgroupid)
+{
+	return find_qgroup_rb(fs_info, qgroupid);
+}
+
 /* must be called with qgroup_lock held */
 static struct btrfs_qgroup *add_qgroup_rb(struct btrfs_fs_info *fs_info,
 					  u64 qgroupid)
@@ -3149,7 +3155,7 @@ static int qgroup_reserve(struct btrfs_root *root, u64 num_bytes, bool enforce,
 		qg = unode_aux_to_qgroup(unode);
 
 		if (enforce && !qgroup_check_limits(qg, num_bytes)) {
-			ret = -EDQUOT;
+			ret = -ENOSPC;
 			goto out;
 		}
 
@@ -3827,7 +3833,7 @@ int btrfs_qgroup_reserve_data(struct btrfs_inode *inode,
 	int ret;
 
 	ret = qgroup_reserve_data(inode, reserved_ret, start, len);
-	if (ret <= 0 && ret != -EDQUOT)
+	if (ret <= 0 && ret != -ENOSPC)
 		return ret;
 
 	ret = try_flush_qgroup(inode->root);
@@ -4038,7 +4044,7 @@ int __btrfs_qgroup_reserve_meta(struct btrfs_root *root, int num_bytes,
 	int ret;
 
 	ret = btrfs_qgroup_reserve_meta(root, num_bytes, type, enforce);
-	if ((ret <= 0 && ret != -EDQUOT) || noflush)
+	if ((ret <= 0 && ret != -ENOSPC) || noflush)
 		return ret;
 
 	ret = try_flush_qgroup(root);

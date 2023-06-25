@@ -1491,7 +1491,7 @@ static void mark_readonly(void)
 		 * flushed so that we don't hit false positives looking for
 		 * insecure pages which are W+X.
 		 */
-		rcu_barrier();
+		//rcu_barrier();
 		mark_rodata_ro();
 		rodata_test();
 	} else

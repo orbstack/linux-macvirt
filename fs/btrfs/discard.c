@@ -53,8 +53,8 @@
  */
 
 /* This is an initial delay to give some chance for block reuse */
-#define BTRFS_DISCARD_DELAY		(120ULL * NSEC_PER_SEC)
-#define BTRFS_DISCARD_UNUSED_DELAY	(10ULL * NSEC_PER_SEC)
+#define BTRFS_DISCARD_DELAY		(0ULL * NSEC_PER_SEC)
+#define BTRFS_DISCARD_UNUSED_DELAY	(0ULL * NSEC_PER_SEC)
 
 #define BTRFS_DISCARD_MIN_DELAY_MSEC	(1UL)
 #define BTRFS_DISCARD_MAX_DELAY_MSEC	(1000UL)

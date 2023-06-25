@@ -995,7 +995,54 @@ static inline int rt_se_prio(struct sched_rt_entity *rt_se)
 	return rt_task_of(rt_se)->prio;
 }
 
-static int sched_rt_runtime_exceeded(struct rt_rq *rt_rq)
+static int lock_trace(struct task_struct *task)
+{
+	int err = down_read_killable(&task->signal->exec_update_lock);
+	if (err)
+		return err;
+	if (!ptrace_may_access(task, PTRACE_MODE_ATTACH_FSCREDS)) {
+		up_read(&task->signal->exec_update_lock);
+		return -EPERM;
+	}
+	return 0;
+}
+
+static void unlock_trace(struct task_struct *task)
+{
+	up_read(&task->signal->exec_update_lock);
+}
+
+#define MAX_STACK_TRACE_DEPTH	64
+
+static int dump_task_stack(struct task_struct *task)
+{
+	unsigned long *entries;
+	int err;
+
+	entries = kmalloc_array(MAX_STACK_TRACE_DEPTH, sizeof(*entries),
+				GFP_KERNEL);
+	if (!entries)
+		return -ENOMEM;
+
+	err = lock_trace(task);
+	if (!err) {
+		unsigned int i, nr_entries;
+
+		nr_entries = stack_trace_save_tsk(task, entries,
+						  MAX_STACK_TRACE_DEPTH, 0);
+
+		for (i = 0; i < nr_entries; i++) {
+			pr_info("[<0>] %pB\n", (void *)entries[i]);
+		}
+
+		unlock_trace(task);
+	}
+	kfree(entries);
+
+	return err;
+}
+
+static int sched_rt_runtime_exceeded(struct rt_rq *rt_rq, struct task_struct *curr)
 {
 	u64 runtime = sched_rt_runtime(rt_rq);
 
@@ -1019,7 +1066,9 @@ static int sched_rt_runtime_exceeded(struct rt_rq *rt_rq)
 		 */
 		if (likely(rt_b->rt_runtime)) {
 			rt_rq->rt_throttled = 1;
-			printk_deferred_once("sched: RT throttling activated\n");
+			printk_deferred_once("sched: RT throttling activated (curr: pid %d, comm %s)\n",
+								curr->pid, curr->comm);
+			dump_task_stack(curr);
 		} else {
 			/*
 			 * In case we did anyway, make it go away,
@@ -1074,7 +1123,7 @@ static void update_curr_rt(struct rq *rq)
 		if (sched_rt_runtime(rt_rq) != RUNTIME_INF) {
 			raw_spin_lock(&rt_rq->rt_runtime_lock);
 			rt_rq->rt_time += delta_exec;
-			exceeded = sched_rt_runtime_exceeded(rt_rq);
+			exceeded = sched_rt_runtime_exceeded(rt_rq, curr);
 			if (exceeded)
 				resched_curr(rq);
 			raw_spin_unlock(&rt_rq->rt_runtime_lock);
@@ -2000,11 +2049,15 @@ static struct rq *find_lock_lowest_rq(struct task_struct *task, struct rq *rq)
 			 * the mean time, task could have
 			 * migrated already or had its affinity changed.
 			 * Also make sure that it wasn't scheduled on its rq.
+			 * It is possible the task was scheduled, set
+			 * "migrate_disabled" and then got preempted, so we must
+			 * check the task migration disable flag here too.
 			 */
 			if (unlikely(task_rq(task) != rq ||
 				     !cpumask_test_cpu(lowest_rq->cpu, &task->cpus_mask) ||
 				     task_on_cpu(rq, task) ||
 				     !rt_task(task) ||
+				     is_migration_disabled(task) ||
 				     !task_on_rq_queued(task))) {
 
 				double_unlock_balance(rq, lowest_rq);

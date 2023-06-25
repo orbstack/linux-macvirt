@@ -62,6 +62,8 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/btrfs.h>
 
+#define QGROUPID_ROOT 5 | (0ULL << BTRFS_QGROUP_LEVEL_SHIFT)
+
 static const struct super_operations btrfs_super_ops;
 
 /*
@@ -139,6 +141,7 @@ enum {
 #ifdef CONFIG_BTRFS_FS_REF_VERIFY
 	Opt_ref_verify,
 #endif
+	Opt_quota_statfs,
 	Opt_err,
 };
 
@@ -213,6 +216,7 @@ static const match_table_t tokens = {
 #ifdef CONFIG_BTRFS_FS_REF_VERIFY
 	{Opt_ref_verify, "ref_verify"},
 #endif
+	{Opt_quota_statfs, "quota_statfs"},
 	{Opt_err, NULL},
 };
 
@@ -803,6 +807,9 @@ int btrfs_parse_options(struct btrfs_fs_info *info, char *options,
 			btrfs_set_opt(info->mount_opt, REF_VERIFY);
 			break;
 #endif
+		case Opt_quota_statfs:
+			btrfs_set_opt(info->mount_opt, QUOTA_STATFS);
+			break;
 		case Opt_err:
 			btrfs_err(info, "unrecognized mount option '%s'", p);
 			ret = -EINVAL;
@@ -826,7 +833,11 @@ out:
 	    !btrfs_test_opt(info, CLEAR_CACHE)) {
 		btrfs_err(info, "cannot disable free space tree");
 		ret = -EINVAL;
-
+	}
+	if (btrfs_fs_compat_ro(info, BLOCK_GROUP_TREE) &&
+	     !btrfs_test_opt(info, FREE_SPACE_TREE)) {
+		btrfs_err(info, "cannot disable free space tree with block-group-tree feature");
+		ret = -EINVAL;
 	}
 	if (!ret)
 		ret = btrfs_check_mountopts_zoned(info);
@@ -1836,6 +1847,12 @@ static int btrfs_remount(struct super_block *sb, int *flags, char *data)
 		btrfs_clear_sb_rdonly(sb);
 
 		set_bit(BTRFS_FS_OPEN, &fs_info->flags);
+
+		/*
+		 * If we've gone from readonly -> read/write, we need to get
+		 * our sync/async discard lists in the right state.
+		 */
+		btrfs_discard_resume(fs_info);
 	}
 out:
 	/*
@@ -2033,6 +2050,8 @@ static int btrfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	int ret;
 	u64 thresh = 0;
 	int mixed = 0;
+	struct btrfs_qgroup *qgroup = NULL;
+	bool use_qgroup_rfer = false;
 
 	list_for_each_entry(found, &fs_info->space_info, list) {
 		if (found->flags & BTRFS_BLOCK_GROUP_DATA) {
@@ -2063,7 +2082,19 @@ static int btrfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 		total_used += found->disk_used;
 	}
 
-	buf->f_blocks = div_u64(btrfs_super_total_bytes(disk_super), factor);
+	mutex_lock(&fs_info->qgroup_ioctl_lock);
+	qgroup = btrfs_find_qgroup_rb(fs_info, QGROUPID_ROOT);
+	if (btrfs_test_opt(fs_info, QUOTA_STATFS) && qgroup != NULL && qgroup->max_rfer > 0) {
+		use_qgroup_rfer = true;
+
+		buf->f_blocks = div_u64(qgroup->max_rfer, factor);
+		total_free_data = qgroup->max_rfer - qgroup->rfer;
+		total_used = qgroup->rfer;
+	} else {
+		buf->f_blocks = div_u64(btrfs_super_total_bytes(disk_super), factor);
+	}
+	mutex_unlock(&fs_info->qgroup_ioctl_lock);
+
 	buf->f_blocks >>= bits;
 	buf->f_bfree = buf->f_blocks - (div_u64(total_used, factor) >> bits);
 
@@ -2077,10 +2108,12 @@ static int btrfs_statfs(struct dentry *dentry, struct kstatfs *buf)
 	spin_unlock(&block_rsv->lock);
 
 	buf->f_bavail = div_u64(total_free_data, factor);
-	ret = btrfs_calc_avail_data_space(fs_info, &total_free_data);
-	if (ret)
-		return ret;
-	buf->f_bavail += div_u64(total_free_data, factor);
+	if (!use_qgroup_rfer) {
+		ret = btrfs_calc_avail_data_space(fs_info, &total_free_data);
+		if (ret)
+			return ret;
+		buf->f_bavail += div_u64(total_free_data, factor);
+	}
 	buf->f_bavail = buf->f_bavail >> bits;
 
 	/*

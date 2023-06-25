@@ -590,7 +590,7 @@ static DEFINE_PER_CPU(unsigned int, stats_updates);
 static atomic_t stats_flush_threshold = ATOMIC_INIT(0);
 static u64 flush_next_time;
 
-#define FLUSH_TIME (2UL*HZ)
+#define FLUSH_TIME (5UL*HZ)
 
 /*
  * Accessors to ensure that preemption is disabled on PREEMPT_RT because it can

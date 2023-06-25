@@ -344,7 +344,7 @@ void		nfsd_lockd_shutdown(void);
 #define	COMPOUND_SLACK_SPACE		140    /* OP_GETFH */
 #define COMPOUND_ERR_SLACK_SPACE	16     /* OP_SETATTR */
 
-#define NFSD_LAUNDROMAT_MINTIMEOUT      1   /* seconds */
+#define NFSD_LAUNDROMAT_MINTIMEOUT      15   /* seconds */
 #define	NFSD_COURTESY_CLIENT_TIMEOUT	(24 * 60 * 60)	/* seconds */
 #define	NFSD_CLIENT_MAX_TRIM_PER_RUN	128
 #define	NFS4_CLIENTS_PER_GB		1024

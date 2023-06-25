@@ -81,7 +81,7 @@ static __read_mostly bool nf_conntrack_locks_all;
 static DEFINE_MUTEX(nf_conntrack_mutex);
 
 #define GC_SCAN_INTERVAL_MAX	(60ul * HZ)
-#define GC_SCAN_INTERVAL_MIN	(1ul * HZ)
+#define GC_SCAN_INTERVAL_MIN	(5ul * HZ)
 
 /* clamp timeouts to this value (TCP unacked) */
 #define GC_SCAN_INTERVAL_CLAMP	(300ul * HZ)
@@ -932,7 +932,6 @@ nf_conntrack_hash_check_insert(struct nf_conn *ct)
 		goto out;
 	}
 
-	ct->status |= IPS_CONFIRMED;
 	smp_wmb();
 	/* The caller holds a reference to this object */
 	refcount_set(&ct->ct_general.use, 2);
@@ -2261,6 +2260,9 @@ static int nf_confirm_cthelper(struct sk_buff *skb, struct nf_conn *ct,
 		return 0;
 
 	helper = rcu_dereference(help->helper);
+	if (!helper)
+		return 0;
+
 	if (!(helper->flags & NF_CT_HELPER_F_USERSPACE))
 		return 0;
 

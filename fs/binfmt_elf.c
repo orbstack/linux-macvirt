@@ -290,8 +290,10 @@ create_elf_tables(struct linux_binprm *bprm, const struct elfhdr *exec,
 		NEW_AUX_ENT(AT_EXECFD, bprm->execfd);
 	}
 #ifdef CONFIG_RSEQ
-	NEW_AUX_ENT(AT_RSEQ_FEATURE_SIZE, offsetof(struct rseq, end));
-	NEW_AUX_ENT(AT_RSEQ_ALIGN, __alignof__(struct rseq));
+	if (!bprm->is_orbcompat) {
+		NEW_AUX_ENT(AT_RSEQ_FEATURE_SIZE, offsetof(struct rseq, end));
+		NEW_AUX_ENT(AT_RSEQ_ALIGN, __alignof__(struct rseq));
+	}
 #endif
 #undef NEW_AUX_ENT
 	/* AT_NULL is zero; clear the rest too */

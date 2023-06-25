@@ -396,4 +396,8 @@ source "fs/unicode/Kconfig"
 config IO_WQ
 	bool
 
+config KRPC
+	bool "[orb] krpc"
+	default y
+
 endmenu

@@ -702,16 +702,11 @@ static ssize_t __write_ports_addfd(char *buf, struct net *net, const struct cred
 	if (err != 0 || fd < 0)
 		return -EINVAL;
 
-	if (svc_alien_sock(net, fd)) {
-		printk(KERN_ERR "%s: socket net is different to NFSd's one\n", __func__);
-		return -EINVAL;
-	}
-
 	err = nfsd_create_serv(net);
 	if (err != 0)
 		return err;
 
-	err = svc_addsock(nn->nfsd_serv, fd, buf, SIMPLE_TRANSACTION_LIMIT, cred);
+	err = svc_addsock(nn->nfsd_serv, net, fd, buf, SIMPLE_TRANSACTION_LIMIT, cred);
 
 	if (err >= 0 &&
 	    !nn->nfsd_serv->sv_nrthreads && !xchg(&nn->keep_active, 1))
@@ -951,7 +946,7 @@ static ssize_t __nfsd4_write_time(struct file *file, char *buf, size_t size,
 		 *	  clients wait an hour before being able to
 		 *	  revoke a dead client's locks?
 		 */
-		if (i < 10 || i > 3600)
+		if (i < 0 || i > 3600)
 			return -EINVAL;
 		*time = i;
 	}

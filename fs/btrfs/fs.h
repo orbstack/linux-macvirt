@@ -174,7 +174,7 @@ enum {
 	BTRFS_MOUNT_IGNOREBADROOTS		= (1UL << 29),
 	BTRFS_MOUNT_IGNOREDATACSUMS		= (1UL << 30),
 	BTRFS_MOUNT_NODISCARD			= (1UL << 31),
-};
+	BTRFS_MOUNT_QUOTA_STATFS		= (1UL << 32),};
 
 /*
  * Compat flags that we support.  If any incompat flags are set other than the

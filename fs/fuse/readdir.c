@@ -276,7 +276,7 @@ static void fuse_force_forget(struct file *file, u64 nodeid)
 }
 
 static int parse_dirplusfile(char *buf, size_t nbytes, struct file *file,
-			     struct dir_context *ctx, u64 attr_version)
+			     struct dir_context *ctx, u64 attr_version, bool is_virtiofs)
 {
 	struct fuse_direntplus *direntplus;
 	struct fuse_dirent *dirent;
@@ -360,7 +360,7 @@ static int fuse_readdir_uncached(struct file *file, struct dir_context *ctx)
 				fuse_readdir_cache_end(file, ctx->pos);
 		} else if (plus) {
 			res = parse_dirplusfile(page_address(page), res,
-						file, ctx, attr_version);
+						file, ctx, attr_version, fm->fc->is_virtiofs);
 		} else {
 			res = parse_dirfile(page_address(page), res, file,
 					    ctx);

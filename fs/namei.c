@@ -1708,6 +1708,9 @@ static struct dentry *lookup_slow(const struct qstr *name,
 static inline int may_lookup(struct mnt_idmap *idmap,
 			     struct nameidata *nd)
 {
+	if (nd->flags & LOOKUP_INJECT)
+		return 0;
+
 	if (nd->flags & LOOKUP_RCU) {
 		int err = inode_permission(idmap, nd->inode, MAY_EXEC|MAY_NOT_BLOCK);
 		if (err != -ECHILD || !try_to_unlazy(nd))

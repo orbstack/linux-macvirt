@@ -1577,6 +1577,16 @@ static inline void skb_copy_hash(struct sk_buff *to, const struct sk_buff *from)
 	to->l4_hash = from->l4_hash;
 };
 
+static inline int skb_cmp_decrypted(const struct sk_buff *skb1,
+				    const struct sk_buff *skb2)
+{
+#ifdef CONFIG_TLS_DEVICE
+	return skb2->decrypted - skb1->decrypted;
+#else
+	return 0;
+#endif
+}
+
 static inline void skb_copy_decrypted(struct sk_buff *to,
 				      const struct sk_buff *from)
 {
@@ -2617,6 +2627,7 @@ static inline void *__skb_pull(struct sk_buff *skb, unsigned int len)
 {
 	skb->len -= len;
 	if (unlikely(skb->len < skb->data_len)) {
+		pr_info("------------[ cut here ]------------\n");
 #if defined(CONFIG_DEBUG_NET)
 		skb->len += len;
 		pr_err("__skb_pull(len=%u)\n", len);

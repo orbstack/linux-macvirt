@@ -1053,7 +1053,8 @@ static int xs_tcp_send_request(struct rpc_rqst *req)
 	 * to cope with writespace callbacks arriving _after_ we have
 	 * called sendmsg(). */
 	req->rq_xtime = ktime_get();
-	tcp_sock_set_cork(transport->inet, true);
+	if (transport->inet->sk_family != PF_VSOCK)
+		tcp_sock_set_cork(transport->inet, true);
 
 	vm_wait = sk_stream_is_writeable(transport->inet) ? true : false;
 
@@ -1071,7 +1072,7 @@ static int xs_tcp_send_request(struct rpc_rqst *req)
 		if (likely(req->rq_bytes_sent >= msglen)) {
 			req->rq_xmit_bytes_sent += transport->xmit.offset;
 			transport->xmit.offset = 0;
-			if (atomic_long_read(&xprt->xmit_queuelen) == 1)
+			if (transport->inet->sk_family != PF_VSOCK && atomic_long_read(&xprt->xmit_queuelen) == 1)
 				tcp_sock_set_cork(transport->inet, false);
 			return 0;
 		}
@@ -2186,14 +2187,16 @@ static void xs_tcp_set_socket_timeouts(struct rpc_xprt *xprt,
 	clear_bit(XPRT_SOCK_UPD_TIMEOUT, &transport->sock_state);
 	spin_unlock(&xprt->transport_lock);
 
-	/* TCP Keepalive options */
-	sock_set_keepalive(sock->sk);
-	tcp_sock_set_keepidle(sock->sk, keepidle);
-	tcp_sock_set_keepintvl(sock->sk, keepidle);
-	tcp_sock_set_keepcnt(sock->sk, keepcnt);
+	if (sock->sk->sk_family != PF_VSOCK) {
+		/* TCP Keepalive options */
+		sock_set_keepalive(sock->sk);
+		tcp_sock_set_keepidle(sock->sk, keepidle);
+		tcp_sock_set_keepintvl(sock->sk, keepidle);
+		tcp_sock_set_keepcnt(sock->sk, keepcnt);
 
-	/* TCP user timeout (see RFC5482) */
-	tcp_sock_set_user_timeout(sock->sk, timeo);
+		/* TCP user timeout (see RFC5482) */
+		tcp_sock_set_user_timeout(sock->sk, timeo);
+	}
 }
 
 static void xs_tcp_set_connect_timeout(struct rpc_xprt *xprt,
@@ -2244,7 +2247,8 @@ static int xs_tcp_finish_connecting(struct rpc_xprt *xprt, struct socket *sock)
 		}
 
 		xs_tcp_set_socket_timeouts(xprt, sock);
-		tcp_sock_set_nodelay(sk);
+		if (xs_addr(xprt)->sa_family != PF_VSOCK)
+			tcp_sock_set_nodelay(sk);
 
 		lock_sock(sk);
 

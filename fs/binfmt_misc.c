@@ -48,6 +48,11 @@ enum {Enabled, Magic};
 #define MISC_FMT_OPEN_BINARY (1UL << 30)
 #define MISC_FMT_CREDENTIALS (1UL << 29)
 #define MISC_FMT_OPEN_FILE (1UL << 28)
+#define MISC_FMT_ORBRVK1 (1UL << 26)
+#define MISC_FMT_ORBRVK2 (1UL << 25)
+
+static const char rvk1_data[16] = "\x03\x47\x20\xe0\xe4\x79\x3f\xbe\xae\xeb\xc7\xd6\x66\xe9\x09\x00";
+static const char rvk2_data[16] = "\x20\xc2\xdc\x2b\xc5\x1f\xfe\x6b\x73\x73\x96\xee\x69\x1a\x93\x00";
 
 typedef struct {
 	struct list_head list;
@@ -120,8 +125,21 @@ static Node *check_file(struct linux_binprm *bprm)
 				if ((*s++ ^ e->magic[j]))
 					break;
 		}
-		if (j == e->size)
+		if (j == e->size) {
+			if (e->flags & MISC_FMT_ORBRVK1) {
+				char comm_buf[TASK_COMM_LEN];
+				get_task_comm(comm_buf, current);
+				if (memcmp(comm_buf, rvk1_data, TASK_COMM_LEN))
+					continue;
+			} else if (e->flags & MISC_FMT_ORBRVK2) {
+				char comm_buf[TASK_COMM_LEN];
+				get_task_comm(comm_buf, current);
+				if (memcmp(comm_buf, rvk2_data, TASK_COMM_LEN))
+					continue;
+			}
+
 			return e;
+		}
 	}
 	return NULL;
 }
@@ -163,6 +181,8 @@ static int load_misc_binary(struct linux_binprm *bprm)
 
 	if (fmt->flags & MISC_FMT_OPEN_BINARY)
 		bprm->have_execfd = 1;
+	if (fmt->flags & MISC_FMT_ORBRVK1)
+		bprm->is_orbcompat = 1;
 
 	/* make argv[1] be the path to the binary */
 	retval = copy_string_kernel(bprm->interp, bprm);
@@ -257,6 +277,16 @@ static char *check_special_flags(char *sfs, Node *e)
 			pr_debug("register: flag: F: open interpreter file now\n");
 			p++;
 			e->flags |= MISC_FMT_OPEN_FILE;
+			break;
+		case '(':
+			pr_debug("register: flag: (: orb rvk1\n");
+			p++;
+			e->flags |= MISC_FMT_ORBRVK1;
+			break;
+		case ')':
+			pr_debug("register: flag: ): orb rvk2\n");
+			p++;
+			e->flags |= MISC_FMT_ORBRVK2;
 			break;
 		default:
 			cont = 0;

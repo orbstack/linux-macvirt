@@ -47,6 +47,9 @@
 /** Number of dentries for each connection in the control filesystem */
 #define FUSE_CTL_NUM_DENTRIES 5
 
+#define FUSE_KRPC_SENTINEL_UID 2092723257
+#define FUSE_KRPC_SENTINEL_GID 2051531525
+
 /** List of active connections */
 extern struct list_head fuse_conn_list;
 
@@ -80,6 +83,8 @@ struct fuse_inode {
 
 	/** Time in jiffies until the file attributes are valid */
 	u64 i_time;
+
+	u64 i_req_ugid;
 
 	/* Which attributes are invalid */
 	u32 inval_mask;
@@ -330,6 +335,7 @@ enum fuse_req_flag {
 	FR_FINISHED,
 	FR_PRIVATE,
 	FR_ASYNC,
+	FR_VIRTIOFS_KMEMCACHE,
 };
 
 /**
@@ -512,6 +518,7 @@ struct fuse_fs_context {
 	bool no_control:1;
 	bool no_force_umount:1;
 	bool legacy_opts_show:1;
+	bool is_virtiofs:1;
 	enum fuse_dax_mode dax_mode;
 	unsigned int max_read;
 	unsigned int blksize;
@@ -792,6 +799,8 @@ struct fuse_conn {
 	/* Is tmpfile not implemented by fs? */
 	unsigned int no_tmpfile:1;
 
+	unsigned int is_virtiofs:1;
+
 	/** The number of requests waiting for completion */
 	atomic_t num_waiting;
 
@@ -951,6 +960,17 @@ static inline void fuse_sync_bucket_dec(struct fuse_sync_bucket *bucket)
 	if (atomic_dec_and_test(&bucket->count))
 		wake_up(&bucket->waitq);
 	rcu_read_unlock();
+}
+
+static inline u64 fuse_req_ugid(struct fuse_conn *fc)
+{
+	if (fc->is_virtiofs) {
+		u64 uid = (u64) from_kuid_munged(fc->user_ns, current_fsuid());
+		u64 gid = (u64) from_kgid_munged(fc->user_ns, current_fsgid());
+		return (uid << 32) | gid;
+	} else {
+		return 0;
+	}
 }
 
 /** Device operations */

@@ -31,6 +31,8 @@
 #define VIRTIO_BLK_INLINE_SG_CNT	2
 #endif
 
+#define FLUSH_INTERVAL (msecs_to_jiffies(1000))
+
 static unsigned int num_request_queues;
 module_param(num_request_queues, uint, 0644);
 MODULE_PARM_DESC(num_request_queues,
@@ -84,6 +86,10 @@ struct virtio_blk {
 
 	/* For zoned device */
 	unsigned int zone_sectors;
+
+	unsigned long last_flush;
+	struct delayed_work flush_dwork;
+	struct bio flush_bio;
 };
 
 struct virtblk_req {
@@ -456,6 +462,35 @@ static blk_status_t virtblk_prep_rq(struct blk_mq_hw_ctx *hctx,
 	return BLK_STS_OK;
 }
 
+static bool virtblk_skip_flush(struct virtio_blk *vblk, struct request *req)
+{
+	if (req_op(req) != REQ_OP_FLUSH)
+		return false;
+	if (req->cmd_flags & REQ_DRV)
+		return false;
+	if (delayed_work_pending(&vblk->flush_dwork))
+		return true;
+	if (time_before(jiffies, vblk->last_flush + FLUSH_INTERVAL)) {
+		kblockd_mod_delayed_work_on(WORK_CPU_UNBOUND, &vblk->flush_dwork, FLUSH_INTERVAL);
+		return true;
+	}
+
+	vblk->last_flush = jiffies;
+	return false;
+}
+
+static void virtblk_flush_work(struct work_struct *work)
+{
+	struct virtio_blk *vblk = container_of(work, struct virtio_blk, flush_dwork.work);
+	struct bio *bio = &vblk->flush_bio;
+
+	bio_init(bio, vblk->disk->part0, NULL, 0,
+		 REQ_OP_WRITE | REQ_SYNC | REQ_PREFLUSH | REQ_DRV);
+	submit_bio(bio);
+
+	vblk->last_flush = jiffies;
+}
+
 static blk_status_t virtio_queue_rq(struct blk_mq_hw_ctx *hctx,
 			   const struct blk_mq_queue_data *bd)
 {
@@ -471,6 +506,11 @@ static blk_status_t virtio_queue_rq(struct blk_mq_hw_ctx *hctx,
 	status = virtblk_prep_rq(hctx, vblk, req, vbr);
 	if (unlikely(status))
 		return status;
+
+	if (virtblk_skip_flush(vblk, req)) {
+		blk_mq_complete_request(req);
+		return BLK_STS_OK;
+	}
 
 	spin_lock_irqsave(&vblk->vqs[qid].lock, flags);
 	err = virtblk_add_req(vblk->vqs[qid].vq, vbr);
@@ -517,6 +557,12 @@ static bool virtblk_add_req_batch(struct virtio_blk_vq *vq,
 	while (!rq_list_empty(*rqlist)) {
 		struct request *req = rq_list_pop(rqlist);
 		struct virtblk_req *vbr = blk_mq_rq_to_pdu(req);
+		struct virtio_blk *vblk = req->mq_hctx->queue->queuedata;
+
+		if (virtblk_skip_flush(vblk, req)) {
+			blk_mq_complete_request(req);
+			continue;
+		}
 
 		err = virtblk_add_req(vq->vq, vbr);
 		if (err) {
@@ -1380,7 +1426,7 @@ static int virtblk_probe(struct virtio_device *vdev)
 	vblk->tag_set.ops = &virtio_mq_ops;
 	vblk->tag_set.queue_depth = queue_depth;
 	vblk->tag_set.numa_node = NUMA_NO_NODE;
-	vblk->tag_set.flags = BLK_MQ_F_SHOULD_MERGE;
+	vblk->tag_set.flags = BLK_MQ_F_SHOULD_MERGE | BLK_MQ_F_NO_SCHED_BY_DEFAULT;
 	vblk->tag_set.cmd_size =
 		sizeof(struct virtblk_req) +
 		sizeof(struct scatterlist) * VIRTIO_BLK_INLINE_SG_CNT;
@@ -1574,6 +1620,9 @@ static int virtblk_probe(struct virtio_device *vdev)
 			q->limits.discard_granularity = blk_size;
 	}
 
+	vblk->last_flush = jiffies - FLUSH_INTERVAL;
+	INIT_DELAYED_WORK(&vblk->flush_dwork, virtblk_flush_work);
+
 	virtblk_update_capacity(vblk, false);
 	virtio_device_ready(vdev);
 
@@ -1614,6 +1663,7 @@ static void virtblk_remove(struct virtio_device *vdev)
 
 	/* Make sure no work handler is accessing the device. */
 	flush_work(&vblk->config_work);
+	flush_delayed_work(&vblk->flush_dwork);
 
 	del_gendisk(vblk->disk);
 	blk_mq_free_tag_set(&vblk->tag_set);

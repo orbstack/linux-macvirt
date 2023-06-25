@@ -5,6 +5,7 @@
  */
 
 #include <sys/socket.h>
+#include <linux/vm_sockets.h>
 
 #include <string.h>
 
@@ -260,44 +261,41 @@ int usbip_net_set_v6only(int sockfd)
  */
 int usbip_net_tcp_connect(char *hostname, char *service)
 {
-	struct addrinfo hints, *res, *rp;
-	int sockfd;
-	int ret;
+	int vsock_port = atoi(hostname);
+	info("waiting for vsock connection on port %d", vsock_port);
 
-	memset(&hints, 0, sizeof(hints));
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
+    int vsock_server_fd = socket(AF_VSOCK, SOCK_STREAM, 0);
+    if (vsock_server_fd < 0) {
+        perror("socket");
+        return -1;
+    }
 
-	/* get all possible addresses */
-	ret = getaddrinfo(hostname, service, &hints, &res);
-	if (ret < 0) {
-		dbg("getaddrinfo: %s service %s: %s", hostname, service,
-		    gai_strerror(ret));
-		return ret;
-	}
+    struct sockaddr_vm addr = {
+        .svm_family = AF_VSOCK,
+        .svm_port = vsock_port,
+        .svm_cid = VMADDR_CID_ANY,
+    };
+    if (bind(vsock_server_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0) {
+        perror("bind");
+		close(vsock_server_fd);
+        return -1;
+    }
 
-	/* try the addresses */
-	for (rp = res; rp; rp = rp->ai_next) {
-		sockfd = socket(rp->ai_family, rp->ai_socktype,
-				rp->ai_protocol);
-		if (sockfd < 0)
-			continue;
+    if (listen(vsock_server_fd, 1) < 0) {
+        perror("listen");
+		close(vsock_server_fd);
+        return -1;
+    }
 
-		/* should set TCP_NODELAY for usbip */
-		usbip_net_set_nodelay(sockfd);
-		/* TODO: write code for heartbeat */
-		usbip_net_set_keepalive(sockfd);
+    int vsock_conn_fd = accept(vsock_server_fd, NULL, NULL);
+    if (vsock_conn_fd < 0) {
+        perror("accept");
+		close(vsock_server_fd);
+        return -1;
+    }
 
-		if (connect(sockfd, rp->ai_addr, rp->ai_addrlen) == 0)
-			break;
+    close(vsock_server_fd);
+	info("connected");
 
-		close(sockfd);
-	}
-
-	freeaddrinfo(res);
-
-	if (!rp)
-		return EAI_SYSTEM;
-
-	return sockfd;
+	return vsock_conn_fd;
 }

@@ -77,6 +77,7 @@ static struct inode *fuse_alloc_inode(struct super_block *sb)
 		return NULL;
 
 	fi->i_time = 0;
+	fi->i_req_ugid = 0;
 	fi->inval_mask = 0;
 	fi->nodeid = 0;
 	fi->nlookup = 0;
@@ -177,8 +178,13 @@ void fuse_change_attributes_common(struct inode *inode, struct fuse_attr *attr,
 	inode->i_ino     = fuse_squash_ino(attr->ino);
 	inode->i_mode    = (inode->i_mode & S_IFMT) | (attr->mode & 07777);
 	set_nlink(inode, attr->nlink);
-	inode->i_uid     = make_kuid(fc->user_ns, attr->uid);
-	inode->i_gid     = make_kgid(fc->user_ns, attr->gid);
+	if (!(fc->is_virtiofs && attr->uid == FUSE_KRPC_SENTINEL_UID && attr->gid == FUSE_KRPC_SENTINEL_GID)) {
+		if (fc->is_virtiofs) {
+			WRITE_ONCE(fi->i_req_ugid, ((u64)attr->uid << 32) | (u64)attr->gid);
+		}
+		inode->i_uid     = make_kuid(fc->user_ns, attr->uid);
+		inode->i_gid     = make_kgid(fc->user_ns, attr->gid);
+	}
 	inode->i_blocks  = attr->blocks;
 
 	/* Sanitize nsecs */
@@ -1579,6 +1585,7 @@ int fuse_fill_super_common(struct super_block *sb, struct fuse_fs_context *ctx)
 	fc->destroy = ctx->destroy;
 	fc->no_control = ctx->no_control;
 	fc->no_force_umount = ctx->no_force_umount;
+	fc->is_virtiofs = ctx->is_virtiofs;
 
 	err = -ENOMEM;
 	root = fuse_get_root_inode(sb, ctx->rootmode);

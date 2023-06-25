@@ -1206,9 +1206,11 @@ static int fuse_update_get_attr(struct inode *inode, struct file *file,
 				unsigned int flags)
 {
 	struct fuse_inode *fi = get_fuse_inode(inode);
+	struct fuse_conn *fc = get_fuse_conn(inode);
 	int err = 0;
 	bool sync;
 	u32 inval_mask = READ_ONCE(fi->inval_mask);
+	u64 file_ugid = READ_ONCE(fi->i_req_ugid);
 	u32 cache_mask = fuse_get_cache_mask(inode);
 
 	if (flags & AT_STATX_FORCE_SYNC)
@@ -1216,6 +1218,8 @@ static int fuse_update_get_attr(struct inode *inode, struct file *file,
 	else if (flags & AT_STATX_DONT_SYNC)
 		sync = false;
 	else if (request_mask & inval_mask & ~cache_mask)
+		sync = true;
+	else if (file_ugid != fuse_req_ugid(fc))
 		sync = true;
 	else
 		sync = time_before64(fi->i_time, get_jiffies_64());
@@ -1416,6 +1420,7 @@ static int fuse_permission(struct mnt_idmap *idmap,
 		u32 perm_mask = STATX_MODE | STATX_UID | STATX_GID;
 
 		if (perm_mask & READ_ONCE(fi->inval_mask) ||
+			READ_ONCE(fi->i_req_ugid) != fuse_req_ugid(fc) ||
 		    time_before64(fi->i_time, get_jiffies_64())) {
 			refreshed = true;
 

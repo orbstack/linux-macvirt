@@ -29,6 +29,8 @@ MODULE_ALIAS("devname:fuse");
 #define FUSE_INT_REQ_BIT (1ULL << 0)
 #define FUSE_REQ_ID_STEP (1ULL << 1)
 
+int _fuse_last_krpc_pid = -1;
+
 static struct kmem_cache *fuse_req_cachep;
 
 static struct fuse_dev *fuse_get_dev(struct file *file)
@@ -135,9 +137,14 @@ static struct fuse_req *fuse_get_req(struct fuse_mount *fm, bool for_background)
 		goto out;
 	}
 
-	req->in.h.uid = from_kuid(fc->user_ns, current_fsuid());
-	req->in.h.gid = from_kgid(fc->user_ns, current_fsgid());
 	req->in.h.pid = pid_nr_ns(task_pid(current), fc->pid_ns);
+	if (fc->is_virtiofs && req->in.h.pid == _fuse_last_krpc_pid) {
+		req->in.h.uid = FUSE_KRPC_SENTINEL_UID;
+		req->in.h.gid = FUSE_KRPC_SENTINEL_GID;
+	} else {
+		req->in.h.uid = from_kuid(fc->user_ns, current_fsuid());
+		req->in.h.gid = from_kgid(fc->user_ns, current_fsgid());
+	}
 
 	__set_bit(FR_WAITING, &req->flags);
 	if (for_background)

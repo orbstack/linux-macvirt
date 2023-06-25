@@ -79,7 +79,7 @@ static irqreturn_t vp_vring_interrupt(int irq, void *opaque)
  * the callback may notify the host which results in the host attempting to
  * raise an interrupt that we would then mask once we acknowledged the
  * interrupt. */
-static irqreturn_t vp_interrupt(int irq, void *opaque)
+static inline irqreturn_t vp_interrupt_prethread(int irq, void *opaque)
 {
 	struct virtio_pci_device *vp_dev = opaque;
 	u8 isr;
@@ -95,6 +95,16 @@ static irqreturn_t vp_interrupt(int irq, void *opaque)
 	/* Configuration change?  Tell driver if it wants to know. */
 	if (isr & VIRTIO_PCI_ISR_CONFIG)
 		vp_config_changed(irq, opaque);
+
+	return IRQ_WAKE_THREAD;
+}
+
+static irqreturn_t vp_interrupt_combined(int irq, void *opaque)
+{
+	irqreturn_t ret = vp_interrupt_prethread(irq, opaque);
+
+	if (ret == IRQ_NONE)
+		return ret;
 
 	return vp_vring_interrupt(irq, opaque);
 }
@@ -159,9 +169,15 @@ static int vp_request_msix_vectors(struct virtio_device *vdev, int nvectors,
 		v = vp_dev->msix_used_vectors;
 		snprintf(vp_dev->msix_names[v], sizeof *vp_dev->msix_names,
 			 "%s-virtqueues", name);
-		err = request_irq(pci_irq_vector(vp_dev->pci_dev, v),
-				  vp_vring_interrupt, 0, vp_dev->msix_names[v],
-				  vp_dev);
+		if (vdev->want_threaded_irq) {
+			err = request_threaded_irq(pci_irq_vector(vp_dev->pci_dev, v),
+					NULL, vp_vring_interrupt, 0, vp_dev->msix_names[v],
+					vp_dev);
+		} else {
+			err = request_irq(pci_irq_vector(vp_dev->pci_dev, v),
+					vp_vring_interrupt, 0, vp_dev->msix_names[v],
+					vp_dev);
+		}
 		if (err)
 			goto error;
 		++vp_dev->msix_used_vectors;
@@ -341,10 +357,17 @@ static int vp_find_vqs_msix(struct virtio_device *vdev, unsigned int nvqs,
 			 sizeof *vp_dev->msix_names,
 			 "%s-%s",
 			 dev_name(&vp_dev->vdev.dev), names[i]);
-		err = request_irq(pci_irq_vector(vp_dev->pci_dev, msix_vec),
-				  vring_interrupt, 0,
-				  vp_dev->msix_names[msix_vec],
-				  vqs[i]);
+		if (vdev->want_threaded_irq) {
+			err = request_threaded_irq(pci_irq_vector(vp_dev->pci_dev, msix_vec),
+							NULL, vring_interrupt, 0,
+							vp_dev->msix_names[msix_vec],
+							vqs[i]);
+		} else {
+			err = request_irq(pci_irq_vector(vp_dev->pci_dev, msix_vec),
+							vring_interrupt, 0,
+							vp_dev->msix_names[msix_vec],
+							vqs[i]);
+		}
 		if (err)
 			goto error_find;
 	}
@@ -366,8 +389,14 @@ static int vp_find_vqs_intx(struct virtio_device *vdev, unsigned int nvqs,
 	if (!vp_dev->vqs)
 		return -ENOMEM;
 
-	err = request_irq(vp_dev->pci_dev->irq, vp_interrupt, IRQF_SHARED,
-			dev_name(&vdev->dev), vp_dev);
+	if (vdev->want_threaded_irq) {
+		err = request_threaded_irq(vp_dev->pci_dev->irq, vp_interrupt_prethread,
+					   vp_vring_interrupt, IRQF_SHARED,
+					   dev_name(&vdev->dev), vp_dev);
+	} else {
+		err = request_irq(vp_dev->pci_dev->irq, vp_interrupt_combined, IRQF_SHARED,
+				  dev_name(&vdev->dev), vp_dev);
+	}
 	if (err)
 		goto out_del_vqs;
 

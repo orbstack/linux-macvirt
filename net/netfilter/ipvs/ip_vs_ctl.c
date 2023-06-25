@@ -225,7 +225,7 @@ static void expire_nodest_conn_handler(struct work_struct *work)
 /*
  *	Timer for checking the defense
  */
-#define DEFENSE_TIMER_PERIOD	1*HZ
+#define DEFENSE_TIMER_PERIOD	45*HZ
 
 static void defense_work_handler(struct work_struct *work)
 {
@@ -2104,13 +2104,13 @@ static struct ctl_table vs_vars[] = {
 	{
 		.procname	= "drop_entry",
 		.maxlen		= sizeof(int),
-		.mode		= 0644,
+		.mode		= 0444,
 		.proc_handler	= proc_do_defense_mode,
 	},
 	{
 		.procname	= "drop_packet",
 		.maxlen		= sizeof(int),
-		.mode		= 0644,
+		.mode		= 0444,
 		.proc_handler	= proc_do_defense_mode,
 	},
 #ifdef CONFIG_IP_VS_NFCT
@@ -4353,7 +4353,7 @@ static int __net_init ip_vs_control_net_init_sysctl(struct netns_ipvs *ipvs)
 	tbl[idx++].data = &ipvs->sysctl_conn_reuse_mode;
 	tbl[idx++].data = &ipvs->sysctl_schedule_icmp;
 	tbl[idx++].data = &ipvs->sysctl_ignore_tunneled;
-	ipvs->sysctl_run_estimation = 1;
+	ipvs->sysctl_run_estimation = 0;
 	tbl[idx].extra2 = ipvs;
 	tbl[idx++].data = &ipvs->sysctl_run_estimation;
 
@@ -4382,8 +4382,8 @@ static int __net_init ip_vs_control_net_init_sysctl(struct netns_ipvs *ipvs)
 		goto err;
 
 	/* Schedule defense work */
-	queue_delayed_work(system_long_wq, &ipvs->defense_work,
-			   DEFENSE_TIMER_PERIOD);
+	//queue_delayed_work(system_long_wq, &ipvs->defense_work,
+	//		   DEFENSE_TIMER_PERIOD);
 
 	return 0;
 

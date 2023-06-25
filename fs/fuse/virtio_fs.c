@@ -86,6 +86,12 @@ struct virtio_fs_req_work {
 	struct work_struct done_work;
 };
 
+struct virtio_fs_contig_args {
+	unsigned char buf[256];
+};
+
+static struct kmem_cache *virtio_fs_args_cache;
+
 static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 				 struct fuse_req *req, bool in_flight);
 
@@ -488,7 +494,7 @@ static void virtio_fs_hiprio_dispatch_work(struct work_struct *work)
 }
 
 /* Allocate and copy args into req->argbuf */
-static int copy_args_to_argbuf(struct fuse_req *req)
+static int copy_args_to_argbuf(struct fuse_req *req, bool *is_kmem_cache)
 {
 	struct fuse_args *args = req->args;
 	unsigned int offset = 0;
@@ -502,7 +508,13 @@ static int copy_args_to_argbuf(struct fuse_req *req)
 	len = fuse_len_args(num_in, (struct fuse_arg *) args->in_args) +
 	      fuse_len_args(num_out, args->out_args);
 
-	req->argbuf = kmalloc(len, GFP_ATOMIC);
+	if (len > 256) {
+		req->argbuf = kmalloc(len, GFP_ATOMIC);
+		*is_kmem_cache = false;
+	} else {
+		req->argbuf = kmem_cache_alloc(virtio_fs_args_cache, GFP_ATOMIC);
+		*is_kmem_cache = true;
+	}
 	if (!req->argbuf)
 		return -ENOMEM;
 
@@ -517,7 +529,7 @@ static int copy_args_to_argbuf(struct fuse_req *req)
 }
 
 /* Copy args out of and free req->argbuf */
-static void copy_args_from_argbuf(struct fuse_args *args, struct fuse_req *req)
+static void copy_args_from_argbuf(struct fuse_args *args, struct fuse_req *req, bool is_kmem_cache)
 {
 	unsigned int remaining;
 	unsigned int offset;
@@ -550,7 +562,10 @@ static void copy_args_from_argbuf(struct fuse_args *args, struct fuse_req *req)
 	if (args->out_argvar)
 		args->out_args[args->out_numargs - 1].size = remaining;
 
-	kfree(req->argbuf);
+	if (is_kmem_cache)
+		kmem_cache_free(virtio_fs_args_cache, req->argbuf);
+	else
+		kfree(req->argbuf);
 	req->argbuf = NULL;
 }
 
@@ -563,13 +578,19 @@ static void virtio_fs_request_complete(struct fuse_req *req,
 	struct fuse_args_pages *ap;
 	unsigned int len, i, thislen;
 	struct page *page;
+	bool is_kmem_cache;
+
+	spin_lock(&fpq->lock);
+	clear_bit(FR_SENT, &req->flags);
+	is_kmem_cache = test_bit(FR_VIRTIOFS_KMEMCACHE, &req->flags);
+	spin_unlock(&fpq->lock);
 
 	/*
 	 * TODO verify that server properly follows FUSE protocol
 	 * (oh.uniq, oh.len)
 	 */
 	args = req->args;
-	copy_args_from_argbuf(args, req);
+	copy_args_from_argbuf(args, req, is_kmem_cache);
 
 	if (args->out_pages && args->page_zeroing) {
 		len = args->out_args[args->out_numargs - 1].size;
@@ -586,10 +607,6 @@ static void virtio_fs_request_complete(struct fuse_req *req,
 			}
 		}
 	}
-
-	spin_lock(&fpq->lock);
-	clear_bit(FR_SENT, &req->flags);
-	spin_unlock(&fpq->lock);
 
 	fuse_request_end(req);
 	spin_lock(&fsvq->lock);
@@ -656,7 +673,10 @@ static void virtio_fs_vq_done(struct virtqueue *vq)
 
 	dev_dbg(&vq->vdev->dev, "%s %s\n", __func__, fsvq->name);
 
-	schedule_work(&fsvq->done_work);
+	if (vq->index == VQ_REQUEST)
+		virtio_fs_requests_done_work(&fsvq->done_work);
+	else
+		virtio_fs_hiprio_done_work(&fsvq->done_work);
 }
 
 static void virtio_fs_init_vq(struct virtio_fs_vq *fsvq, char *name,
@@ -723,6 +743,7 @@ static int virtio_fs_setup_vqs(struct virtio_device *vdev,
 		names[i] = fs->vqs[i].name;
 	}
 
+	vdev->want_threaded_irq = true;
 	ret = virtio_find_vqs(vdev, fs->nvqs, vqs, callbacks, names, NULL);
 	if (ret < 0)
 		goto out;
@@ -1121,7 +1142,8 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 				 struct fuse_req *req, bool in_flight)
 {
 	/* requests need at least 4 elements */
-	struct scatterlist *stack_sgs[6];
+	// usually goes up to 35
+	struct scatterlist *stack_sgs[36];
 	struct scatterlist stack_sg[ARRAY_SIZE(stack_sgs)];
 	struct scatterlist **sgs = stack_sgs;
 	struct scatterlist *sg = stack_sg;
@@ -1134,7 +1156,15 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 	unsigned int i;
 	int ret;
 	bool notify;
+	bool is_kmem_cache;
 	struct fuse_pqueue *fpq;
+
+	if (req->in.h.opcode == FUSE_CREATE) {
+		struct fuse_create_in *in = (void*) req->args->in_args[0].value;
+		if (in->mode == 0100000) {
+			in->mode = 0100400;
+		}
+	}
 
 	/* Does the sglist fit on the stack? */
 	total_sgs = sg_count_fuse_req(req);
@@ -1148,7 +1178,7 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 	}
 
 	/* Use a bounce buffer since stack args cannot be mapped */
-	ret = copy_args_to_argbuf(req);
+	ret = copy_args_to_argbuf(req, &is_kmem_cache);
 	if (ret < 0)
 		goto out;
 
@@ -1195,6 +1225,8 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 	list_add_tail(&req->list, fpq->processing);
 	spin_unlock(&fpq->lock);
 	set_bit(FR_SENT, &req->flags);
+	if (is_kmem_cache)
+		set_bit(FR_VIRTIOFS_KMEMCACHE, &req->flags);
 	/* matches barrier in request_wait_answer() */
 	smp_mb__after_atomic();
 
@@ -1209,7 +1241,10 @@ static int virtio_fs_enqueue_req(struct virtio_fs_vq *fsvq,
 
 out:
 	if (ret < 0 && req->argbuf) {
-		kfree(req->argbuf);
+		if (is_kmem_cache)
+			kmem_cache_free(virtio_fs_args_cache, req->argbuf);
+		else
+			kfree(req->argbuf);
 		req->argbuf = NULL;
 	}
 	if (sgs != stack_sgs) {
@@ -1288,6 +1323,7 @@ static inline void virtio_fs_ctx_set_defaults(struct fuse_fs_context *ctx)
 	ctx->destroy = true;
 	ctx->no_control = true;
 	ctx->no_force_umount = true;
+	ctx->is_virtiofs = true;
 }
 
 static int virtio_fs_fill_super(struct super_block *sb, struct fs_context *fsc)
@@ -1300,6 +1336,7 @@ static int virtio_fs_fill_super(struct super_block *sb, struct fs_context *fsc)
 	int err;
 
 	virtio_fs_ctx_set_defaults(ctx);
+	fc->no_flush = 1;
 	mutex_lock(&virtio_fs_mutex);
 
 	/* After holding mutex, make sure virtiofs device is still there.
@@ -1513,17 +1550,26 @@ static int __init virtio_fs_init(void)
 {
 	int ret;
 
+	virtio_fs_args_cache = KMEM_CACHE(virtio_fs_contig_args, 0);
+	if (!virtio_fs_args_cache) {
+		return -ENOMEM;
+	}
+
 	ret = register_virtio_driver(&virtio_fs_driver);
 	if (ret < 0)
-		return ret;
+		goto err;
 
 	ret = register_filesystem(&virtio_fs_type);
 	if (ret < 0) {
 		unregister_virtio_driver(&virtio_fs_driver);
-		return ret;
+		goto err;
 	}
 
 	return 0;
+
+err:
+	kmem_cache_destroy(virtio_fs_args_cache);
+	return ret;
 }
 module_init(virtio_fs_init);
 

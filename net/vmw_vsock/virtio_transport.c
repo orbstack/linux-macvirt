@@ -392,7 +392,7 @@ static void virtio_vsock_event_done(struct virtqueue *vq)
 
 	if (!vsock)
 		return;
-	queue_work(virtio_vsock_workqueue, &vsock->event_work);
+	virtio_transport_event_work(&vsock->event_work);
 }
 
 static void virtio_vsock_tx_done(struct virtqueue *vq)
@@ -401,16 +401,7 @@ static void virtio_vsock_tx_done(struct virtqueue *vq)
 
 	if (!vsock)
 		return;
-	queue_work(virtio_vsock_workqueue, &vsock->tx_work);
-}
-
-static void virtio_vsock_rx_done(struct virtqueue *vq)
-{
-	struct virtio_vsock *vsock = vq->vdev->priv;
-
-	if (!vsock)
-		return;
-	queue_work(virtio_vsock_workqueue, &vsock->rx_work);
+	virtio_transport_tx_work(&vsock->tx_work);
 }
 
 static bool virtio_transport_seqpacket_allow(u32 remote_cid);
@@ -529,6 +520,15 @@ out:
 	mutex_unlock(&vsock->rx_lock);
 }
 
+static void virtio_vsock_rx_done(struct virtqueue *vq)
+{
+	struct virtio_vsock *vsock = vq->vdev->priv;
+
+	if (!vsock)
+		return;
+	virtio_transport_rx_work(&vsock->rx_work);
+}
+
 static int virtio_vsock_vqs_init(struct virtio_vsock *vsock)
 {
 	struct virtio_device *vdev = vsock->vdev;
@@ -544,6 +544,7 @@ static int virtio_vsock_vqs_init(struct virtio_vsock *vsock)
 	};
 	int ret;
 
+	vdev->want_threaded_irq = true;
 	ret = virtio_find_vqs(vdev, VSOCK_VQ_MAX, vsock->vqs, callbacks, names,
 			      NULL);
 	if (ret < 0)
